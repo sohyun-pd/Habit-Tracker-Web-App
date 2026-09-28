@@ -1,18 +1,47 @@
 import { useState } from 'react';
+import useAuth from './hooks/useAuth';
+import useFeedback from './hooks/useFeedback';
 import useLocalStorage from './hooks/useLocalStorage';
+import AuthScreen from './components/AuthScreen';
+import AppShell from './components/AppShell';
+import ConsentScreen from './components/ConsentScreen';
+import CoachApp from './components/CoachApp';
 import AddHabitForm from './components/AddHabitForm';
 import HabitList from './components/HabitList';
-import ProgressBar from './components/ProgressBar';
+import MissedRecently from './components/MissedRecently';
+import SafetyNotice from './components/SafetyNotice';
+import TodaySummary from './components/TodaySummary';
+import WeeklyPage from './components/WeeklyPage';
 import CalendarView from './components/CalendarView';
 import StatisticsDashboard from './components/StatisticsDashboard';
 import DataExport from './components/DataExport';
+import { toDateKey } from './utils/date';
+import { buildDemoData } from './utils/demo';
+import { getMissedItems } from './utils/missed';
 
 function App() {
-  const [habits, setHabits] = useLocalStorage('habits', []);
-  const [completions, setCompletions] = useLocalStorage('completions', {});
-  const [activeTab, setActiveTab] = useState('habits');
+  const { users, user, signUp, signIn, signOut } = useAuth();
 
-  const today = new Date().toISOString().split('T')[0];
+  if (!user) {
+    return <AuthScreen users={users} onSignIn={signIn} onSignUp={signUp} />;
+  }
+
+  // Keyed by user so each account loads its own stored data.
+  return user.role === 'coach'
+    ? <CoachApp key={user.id} user={user} onSignOut={signOut} />
+    : <Tracker key={user.id} user={user} onSignOut={signOut} />;
+}
+
+function Tracker({ user, onSignOut }) {
+  const [habits, setHabits] = useLocalStorage(`habits:${user.id}`, []);
+  const [completions, setCompletions] = useLocalStorage(`completions:${user.id}`, {});
+  const [misses, setMisses] = useLocalStorage(`misses:${user.id}`, {});
+  const [consent, setConsent] = useLocalStorage(`consent:${user.id}`, null);
+  const [feedback, upsertFeedback] = useFeedback();
+  const [activeTab, setActiveTab] = useState('habits');
+  const [safetyVisible, setSafetyVisible] = useState(false);
+
+  const today = toDateKey(new Date());
 
   const addHabit = (newHabit) => {
     const habit = {
@@ -34,6 +63,9 @@ function App() {
     const newCompletions = { ...completions };
     delete newCompletions[id];
     setCompletions(newCompletions);
+    const newMisses = { ...misses };
+    delete newMisses[id];
+    setMisses(newMisses);
   };
 
   const toggleComplete = (id) => {
@@ -52,92 +84,157 @@ function App() {
     }
   };
 
-  const completedToday = habits.filter(habit => (completions[habit.id] || []).includes(today)).length;
-
-  const getMotivationalMessage = () => {
-    const percentage = habits.length > 0 ? Math.round((completedToday / habits.length) * 100) : 0;
-    if (percentage === 100 && habits.length > 0) return "🎉 Amazing! All habits completed today!";
-    if (percentage >= 75) return "🚀 Great progress! Keep it up!";
-    if (percentage >= 50) return "💪 You're doing well! Stay consistent!";
-    if (percentage >= 25) return "🌟 Good start! Every step counts!";
-    return "🌱 Every journey begins with a single step!";
+  const saveMiss = (habitId, dateKey, payload) => {
+    setMisses({ ...misses, [habitId]: { ...(misses[habitId] || {}), [dateKey]: payload } });
+    if (payload.flagged) setSafetyVisible(true);
   };
 
+  // Merges an imported backup into the current data.
+  const importData = (imported) => {
+    const knownIds = new Set(habits.map(h => h.id));
+    setHabits([...habits, ...imported.habits.filter(h => !knownIds.has(h.id))]);
+
+    const merged = { ...completions };
+    Object.entries(imported.completions).forEach(([id, dates]) => {
+      merged[id] = [...new Set([...(merged[id] || []), ...dates])];
+    });
+    setCompletions(merged);
+
+    if (imported.misses && typeof imported.misses === 'object') {
+      const mergedMisses = { ...misses };
+      Object.entries(imported.misses).forEach(([id, byDate]) => {
+        mergedMisses[id] = { ...byDate, ...(mergedMisses[id] || {}) };
+      });
+      setMisses(mergedMisses);
+    }
+  };
+
+  const clearAllData = () => {
+    setHabits([]);
+    setCompletions({});
+    setMisses({});
+  };
+
+  const loadSampleData = () => {
+    const sample = buildDemoData();
+    setHabits([...habits, ...sample.habits]);
+    setCompletions({ ...completions, ...sample.completions });
+    setMisses({ ...misses, ...sample.misses });
+  };
+
+  const setSharing = (status) => setConsent({ status, at: new Date().toISOString() });
+
+  const myFeedback = feedback.filter(f => f.userId === user.id);
+  const unreadFeedback = myFeedback.filter(f => f.sentAt && !f.readAt).length;
+  const markRead = (id) => upsertFeedback(id, { readAt: new Date().toISOString() });
+  const rateFeedback = (id, rating) => upsertFeedback(id, { rating });
+  const confirmPlan = (id) => upsertFeedback(id, { planConfirmedAt: new Date().toISOString() });
+
+  const completedToday = habits.filter(habit => (completions[habit.id] || []).includes(today)).length;
+  const nextHabit = habits.find(habit => !(completions[habit.id] || []).includes(today)) || null;
+  const percentage = habits.length > 0 ? Math.round((completedToday / habits.length) * 100) : 0;
+  const missedItems = getMissedItems(habits, completions, misses);
+
+  const getMotivationalMessage = () => {
+    if (percentage === 100 && habits.length > 0) return "Amazing! All habits completed today!";
+    if (percentage >= 75) return "Great progress! Keep it up!";
+    if (percentage >= 50) return "You're doing well! Stay consistent!";
+    if (percentage >= 25) return "Good start! Every step counts!";
+    return "Every journey begins with a single step!";
+  };
+
+  if (consent === null) {
+    return <ConsentScreen user={user} onChoose={setSharing} />;
+  }
+
   const tabs = [
-    { id: 'habits', label: 'Habits', icon: '🎯' },
-    { id: 'calendar', label: 'Calendar', icon: '📅' },
-    { id: 'statistics', label: 'Statistics', icon: '📊' },
-    { id: 'data', label: 'Data', icon: '💾' },
+    { id: 'habits', label: 'Today' },
+    { id: 'weekly', label: 'Weekly', badge: unreadFeedback },
+    { id: 'calendar', label: 'Calendar' },
+    { id: 'statistics', label: 'Statistics' },
+    { id: 'data', label: 'Data' },
   ];
+  const pageTitle = tabs.find(tab => tab.id === activeTab).label;
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-50 via-indigo-50 to-purple-50 py-8">
-      <div className="container mx-auto px-4 max-w-4xl">
-        <div className="text-center mb-8 animate-fade-in-up">
-          <h1 className="text-4xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent mb-2">
-            🌟 Habit Tracker
-          </h1>
-          <p className="text-gray-600 text-lg">{getMotivationalMessage()}</p>
-        </div>
-
-        {/* Navigation Tabs */}
-        <div className="mb-6 bg-white rounded-xl shadow-lg p-2 border border-gray-100">
-          <div className="flex space-x-1">
-            {tabs.map((tab) => (
-              <button
-                key={tab.id}
-                onClick={() => setActiveTab(tab.id)}
-                className={`flex-1 py-3 px-4 rounded-lg font-medium transition-all duration-200 ${
-                  activeTab === tab.id
-                    ? 'bg-gradient-to-r from-blue-500 to-purple-600 text-white shadow-md transform scale-105'
-                    : 'text-gray-600 hover:bg-gray-100'
-                }`}
-              >
-                <span className="mr-2">{tab.icon}</span>
-                {tab.label}
-              </button>
-            ))}
+    <AppShell
+      tabs={tabs}
+      activeTab={activeTab}
+      onTabChange={setActiveTab}
+      user={user}
+      onSignOut={onSignOut}
+      status={{ label: 'Today', value: `${completedToday}/${habits.length}`, note: 'habits done' }}
+      statusText={`${completedToday}/${habits.length} done today`}
+      title={pageTitle}
+    >
+      {activeTab === 'habits' && (
+        <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_340px]">
+          <div className="xl:col-start-1">
+            <TodaySummary
+              completed={completedToday}
+              total={habits.length}
+              nextHabit={nextHabit}
+              onComplete={toggleComplete}
+              message={getMotivationalMessage()}
+            />
+          </div>
+          <div className="xl:col-start-2 xl:row-span-3 xl:row-start-1 xl:sticky xl:top-10 xl:self-start">
+            <AddHabitForm onAddHabit={addHabit} />
+          </div>
+          {(safetyVisible || missedItems.length > 0) && (
+            <div className="space-y-6 xl:col-start-1">
+              {safetyVisible && <SafetyNotice onDismiss={() => setSafetyVisible(false)} />}
+              {missedItems.length > 0 && <MissedRecently items={missedItems} onSave={saveMiss} />}
+            </div>
+          )}
+          <div className="xl:col-start-1">
+            <HabitList
+              habits={habits}
+              completions={completions}
+              onToggleComplete={toggleComplete}
+              onEditHabit={editHabit}
+              onDeleteHabit={deleteHabit}
+            />
           </div>
         </div>
+      )}
 
-        {/* Tab Content */}
-        <div className="animate-fade-in-up" style={{ animationDelay: '0.1s' }}>
-          {activeTab === 'habits' && (
-            <>
-              <AddHabitForm onAddHabit={addHabit} />
-              <ProgressBar completed={completedToday} total={habits.length} />
-              <HabitList
-                habits={habits}
-                completions={completions}
-                onToggleComplete={toggleComplete}
-                onEditHabit={editHabit}
-                onDeleteHabit={deleteHabit}
-              />
-            </>
-          )}
+      {activeTab === 'weekly' && (
+        <WeeklyPage
+          habits={habits}
+          completions={completions}
+          misses={misses}
+          consent={consent}
+          feedbackList={myFeedback}
+          onRead={markRead}
+          onRate={rateFeedback}
+          onConfirmPlan={confirmPlan}
+          onEnableSharing={() => setSharing('granted')}
+          onAdjust={() => setActiveTab('habits')}
+        />
+      )}
 
-          {activeTab === 'calendar' && (
-            <CalendarView completions={completions} habits={habits} />
-          )}
+      {activeTab === 'calendar' && (
+        <CalendarView completions={completions} habits={habits} />
+      )}
 
-          {activeTab === 'statistics' && (
-            <StatisticsDashboard habits={habits} completions={completions} />
-          )}
+      {activeTab === 'statistics' && (
+        <StatisticsDashboard habits={habits} completions={completions} />
+      )}
 
-          {activeTab === 'data' && (
-            <DataExport habits={habits} completions={completions} />
-          )}
-        </div>
-
-        {habits.length === 0 && activeTab === 'habits' && (
-          <div className="text-center mt-12 animate-fade-in-up" style={{ animationDelay: '0.4s' }}>
-            <div className="text-6xl mb-4 animate-pulse-gentle">🎯</div>
-            <h3 className="text-xl font-semibold text-gray-700 mb-2">Ready to build better habits?</h3>
-            <p className="text-gray-500">Start by adding your first habit above!</p>
-          </div>
-        )}
-      </div>
-    </div>
+      {activeTab === 'data' && (
+        <DataExport
+          habits={habits}
+          completions={completions}
+          misses={misses}
+          consent={consent}
+          onConsentChange={setSharing}
+          onImport={importData}
+          onClear={clearAllData}
+          onLoadSample={loadSampleData}
+        />
+      )}
+    </AppShell>
   );
 }
 

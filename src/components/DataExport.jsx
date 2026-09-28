@@ -1,10 +1,15 @@
-function DataExport({ habits, completions }) {
+import { useState } from 'react';
+
+function DataExport({ habits, completions, misses, consent, onConsentChange, onImport, onClear, onLoadSample }) {
+  const [notice, setNotice] = useState('');
+
   const exportData = () => {
     const data = {
       habits,
       completions,
+      misses,
       exportDate: new Date().toISOString(),
-      version: "1.0"
+      version: "1.1"
     };
 
     const dataStr = JSON.stringify(data, null, 2);
@@ -18,10 +23,12 @@ function DataExport({ habits, completions }) {
     link.click();
     document.body.removeChild(link);
     URL.revokeObjectURL(url);
+    setNotice('Backup downloaded.');
   };
 
   const importData = (event) => {
-    const file = event.target.files[0];
+    const input = event.target;
+    const file = input.files[0];
     if (!file) return;
 
     const reader = new FileReader();
@@ -29,84 +36,119 @@ function DataExport({ habits, completions }) {
       try {
         const importedData = JSON.parse(e.target.result);
 
-        if (importedData.habits && importedData.completions) {
-          // Here you would typically call a function to update the app state
-          // For now, we'll just show a success message
-          alert('Data imported successfully! Please refresh the page to see changes.');
-          console.log('Imported data:', importedData);
+        if (Array.isArray(importedData.habits) && importedData.completions && typeof importedData.completions === 'object') {
+          onImport(importedData);
+          setNotice(`Imported ${importedData.habits.length} habits from ${file.name}.`);
         } else {
-          alert('Invalid file format. Please select a valid habit tracker backup file.');
+          setNotice('Invalid file format. Please select a valid habit tracker backup file.');
         }
       } catch (error) {
-        alert('Error reading file. Please make sure it\'s a valid JSON file.');
+        setNotice("Error reading file. Please make sure it's a valid JSON file.");
         console.error('Import error:', error);
       }
+      input.value = '';
     };
     reader.readAsText(file);
   };
 
   const clearAllData = () => {
     if (window.confirm('Are you sure you want to clear all habit data? This action cannot be undone.')) {
-      localStorage.removeItem('habits');
-      localStorage.removeItem('completions');
-      alert('All data cleared. Please refresh the page.');
+      onClear();
+      setNotice('All habit data cleared.');
     }
   };
 
-  return (
-    <div className="mb-6 p-6 bg-white rounded-xl shadow-lg border border-gray-100">
-      <div className="flex items-center mb-6">
-        <div className="text-2xl mr-3">💾</div>
-        <h2 className="text-2xl font-semibold text-gray-800">Data Management</h2>
-      </div>
+  const loadSample = () => {
+    if (window.confirm('Add 3 sample habits with 5 weeks of sample check-ins? Your existing habits are kept.')) {
+      onLoadSample();
+      setNotice('Sample data added. Open Weekly to see the summary.');
+    }
+  };
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+  const sharing = consent?.status === 'granted';
+
+  return (
+    <div className="space-y-6">
+      {notice && (
+        <p role="status" className="rounded-xl border border-ink bg-paper px-5 py-3 text-small">
+          {notice}
+        </p>
+      )}
+
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
         {/* Export Data */}
-        <div className="text-center">
-          <button
-            onClick={exportData}
-            className="w-full bg-gradient-to-r from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700 text-white font-semibold py-3 px-6 rounded-lg transition-all duration-200 transform hover:scale-105 shadow-md hover:shadow-lg"
-          >
-            📤 Export Data
-          </button>
-          <p className="text-sm text-gray-600 mt-2">
+        <section className="card flex flex-col">
+          <h2 className="mb-2 text-subheading">Export</h2>
+          <p className="mb-6 flex-1 text-small text-ash">
             Download your habits and progress as a JSON file
           </p>
-        </div>
+          <button onClick={exportData} className="btn btn-primary w-full">
+            Export data
+          </button>
+        </section>
 
         {/* Import Data */}
-        <div className="text-center">
-          <label className="w-full bg-gradient-to-r from-green-500 to-green-600 hover:from-green-600 hover:to-green-700 text-white font-semibold py-3 px-6 rounded-lg transition-all duration-200 transform hover:scale-105 shadow-md hover:shadow-lg cursor-pointer block">
-            📥 Import Data
+        <section className="card flex flex-col">
+          <h2 className="mb-2 text-subheading">Import</h2>
+          <p className="mb-6 flex-1 text-small text-ash">
+            Upload a previously exported backup file
+          </p>
+          <label className="btn btn-outline w-full has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-ink">
+            Import data
             <input
               type="file"
               accept=".json"
               onChange={importData}
-              className="hidden"
+              className="sr-only"
             />
           </label>
-          <p className="text-sm text-gray-600 mt-2">
-            Upload a previously exported backup file
-          </p>
-        </div>
+        </section>
 
         {/* Clear Data */}
-        <div className="text-center">
-          <button
-            onClick={clearAllData}
-            className="w-full bg-gradient-to-r from-red-500 to-red-600 hover:from-red-600 hover:to-red-700 text-white font-semibold py-3 px-6 rounded-lg transition-all duration-200 transform hover:scale-105 shadow-md hover:shadow-lg"
-          >
-            🗑️ Clear All Data
-          </button>
-          <p className="text-sm text-gray-600 mt-2">
+        <section className="card flex flex-col">
+          <h2 className="mb-2 text-subheading">Clear</h2>
+          <p className="mb-6 flex-1 text-small text-ash">
             Permanently delete all habits and progress
           </p>
-        </div>
+          <button onClick={clearAllData} className="btn btn-outline w-full">
+            Clear all data
+          </button>
+        </section>
       </div>
 
-      <div className="mt-6 p-4 bg-blue-50 rounded-lg border border-blue-200">
-        <h3 className="font-semibold text-blue-800 mb-2">💡 Data Management Tips</h3>
-        <ul className="text-sm text-blue-700 space-y-1">
+      <section className="card flex flex-wrap items-center justify-between gap-4">
+        <div className="min-w-0 flex-1 basis-64">
+          <h2 className="mb-1 text-subheading">Coach sharing</h2>
+          <p className="text-small text-ash">
+            {sharing
+              ? 'On. Coaches can see your habits, check-ins, and missed-check-in reasons.'
+              : 'Off. No coach can see your data.'}
+          </p>
+        </div>
+        <button
+          onClick={() => {
+            onConsentChange(sharing ? 'declined' : 'granted');
+            setNotice(sharing ? 'Coach sharing turned off.' : 'Coach sharing turned on.');
+          }}
+          className={`btn ${sharing ? 'btn-outline' : 'btn-primary'}`}
+        >
+          {sharing ? 'Turn off sharing' : 'Turn on sharing'}
+        </button>
+      </section>
+
+      <section className="card flex flex-wrap items-center justify-between gap-4">
+        <div className="min-w-0 flex-1 basis-64">
+          <h2 className="mb-1 text-subheading">Sample data</h2>
+          <p className="text-small text-ash">
+            Add 5 weeks of sample check-ins to try the weekly summary and coach feedback.
+          </p>
+        </div>
+        <button onClick={loadSample} className="btn btn-outline">Add sample data</button>
+      </section>
+
+      <div className="rounded-xl border border-hairline p-5">
+        <h2 className="eyebrow mb-2">Notes</h2>
+        <ul className="space-y-1 text-small text-ash">
           <li>• Export your data regularly to create backups</li>
           <li>• Imported data will merge with existing habits</li>
           <li>• Clear data action cannot be undone</li>
